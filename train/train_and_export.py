@@ -41,7 +41,11 @@ sys.path.insert(0, str(REPO / "src"))
 from convexguard.data import drop_duplicates, load_raw
 from convexguard.duality import primal_objective
 from convexguard.kkt import kkt_violations
-from convexguard.metrics import evaluate
+from convexguard.metrics import (
+    evaluate,
+    safe_average_precision_score,
+    safe_precision_recall_curve,
+)
 from convexguard.preprocess import apply_scaler, fit_scaler, get_Xy, stratified_split
 from convexguard.solvers.primal_subgradient import PrimalSubgradientSVM
 from convexguard.threshold import find_threshold_fbeta
@@ -78,10 +82,12 @@ def _arr(a) -> list:
 log.info("Loading %s …", CSV_PATH)
 raw = load_raw(CSV_PATH)
 df, dedup = drop_duplicates(raw)
+df = df.copy()
 
 # 30 model features: V1 to V28, LogAmount and Hour
 df["LogAmount"] = np.log1p(df["Amount"].clip(lower=0))
 df["Hour"] = (df["Time"] // 3600 % 24).astype(int)
+
 
 FEATURE_COLS = [f"V{i}" for i in range(1, 29)] + ["LogAmount", "Hour"]
 log.info("Features (%d): %s", len(FEATURE_COLS), FEATURE_COLS)
@@ -214,8 +220,20 @@ eda_data = {
 log.info("Computing metrics and baselines …")
 
 # PR + threshold grid for primary SVM
-pr_prec, pr_rec, pr_thresh = precision_recall_curve(y_test_bin, scores_test)
-pr_auc = float(average_precision_score(y_test_bin, scores_test))
+pr_prec, pr_rec, pr_thresh = safe_precision_recall_curve(y_test_bin, scores_test)
+pr_auc = safe_average_precision_score(y_test_bin, scores_test)
+
+# Decimate PR curve for fast browser chart rendering (~300 points)
+if len(pr_prec) > 300:
+    step = max(1, len(pr_prec) // 300)
+    sub_idx = np.arange(0, len(pr_prec), step)
+    if sub_idx[-1] != len(pr_prec) - 1:
+        sub_idx = np.append(sub_idx, len(pr_prec) - 1)
+    pr_prec_export = pr_prec[sub_idx]
+    pr_rec_export = pr_rec[sub_idx]
+else:
+    pr_prec_export = pr_prec
+    pr_rec_export = pr_rec
 
 # Threshold slider grid (200 points)
 t_min = float(scores_test.min())
@@ -241,7 +259,7 @@ def _train_eval(clf, X_tr, y_tr, X_te, y_te_bin, thresh=None):
         sc = clf.decision_function(X_te)
     else:
         sc = clf.predict_proba(X_te)[:, 1]
-    prauc = float(average_precision_score(y_te_bin, sc))
+    prauc = safe_average_precision_score(y_te_bin, sc)
     if thresh is None:
         t, _ = find_threshold_fbeta(y_te_bin, sc, beta=2.0)
     else:
@@ -281,14 +299,15 @@ res_main = {"pr_auc": round(pr_auc, 4), "precision": round(p_m, 4),
 
 metrics_data = {
     "pr_curve": {
-        "precision": [round(float(p), 5) for p in pr_prec.tolist()],
-        "recall":    [round(float(r), 5) for r in pr_rec.tolist()],
+        "precision": [round(float(p), 5) for p in pr_prec_export.tolist()],
+        "recall":    [round(float(r), 5) for r in pr_rec_export.tolist()],
     },
     "threshold":     _f(threshold),
     "pr_auc":        round(pr_auc, 4),
     "score_min":     _f(t_min),
     "score_max":     _f(t_max),
     "slider_grid":   slider_grid,
+
     "comparisons": [
         {"name": "Logistic Regression",       **res_lr},
         {"name": "sklearn LinearSVC",         **res_lsvc},

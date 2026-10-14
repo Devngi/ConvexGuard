@@ -19,7 +19,6 @@ import logging
 
 import numpy as np
 from sklearn.metrics import (
-    average_precision_score,
     confusion_matrix,
     f1_score,
     fbeta_score,
@@ -28,6 +27,50 @@ from sklearn.metrics import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def safe_precision_recall_curve(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    pos_label: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Compute precision-recall pairs across classification thresholds.
+
+    Fixes a critical CPython 3.14 + NumPy array buffer reuse bug where `ps = tps + fps`
+    mutates `tps` in-place when n >= 32,768 (2^15), causing precision to be 1.0 everywhere.
+    """
+    y_true = (np.asarray(y_true) == pos_label).astype(int)
+    y_score = np.asarray(y_score, dtype=np.float64)
+
+    desc = np.argsort(y_score, kind="stable")[::-1]
+    y_true_sorted = y_true[desc]
+    scores_sorted = y_score[desc]
+
+    distinct = np.where(np.diff(scores_sorted) != 0)[0]
+    threshold_idxs = np.concatenate([distinct, [len(y_true_sorted) - 1]])
+
+    tps = np.cumsum(y_true_sorted)[threshold_idxs]
+    fps = (1.0 + threshold_idxs) - tps
+
+    # Explicit copy ensures Python 3.14 does not reuse tps's buffer in-place
+    ps = np.copy(tps) + fps
+    precision = np.where(ps != 0, tps / ps, 0.0)
+    recall = tps / tps[-1] if tps[-1] > 0 else np.zeros_like(tps)
+
+    p = np.concatenate([precision[::-1], [1.0]])
+    r = np.concatenate([recall[::-1], [0.0]])
+    th = scores_sorted[threshold_idxs][::-1]
+    return p, r, th
+
+
+def safe_average_precision_score(
+    y_true: np.ndarray,
+    y_score: np.ndarray,
+    pos_label: int = 1,
+) -> float:
+    """Compute uninterpolated average precision (PR-AUC) immune to Python 3.14 buffer reuse."""
+    p, r, _ = safe_precision_recall_curve(y_true, y_score, pos_label=pos_label)
+    return float(max(0.0, -np.sum(np.diff(r) * p[:-1])))
 
 
 def evaluate(
@@ -62,7 +105,7 @@ def evaluate(
     # Normalise labels to {0, 1}
     y_bin = (y_true > 0).astype(int)
 
-    pr_auc = float(average_precision_score(y_bin, y_score))
+    pr_auc = safe_average_precision_score(y_bin, y_score)
     y_pred = (y_score >= threshold).astype(int)
 
     tn, fp, fn, tp = confusion_matrix(y_bin, y_pred, labels=[0, 1]).ravel()
@@ -145,6 +188,7 @@ def pr_auc_ci(
         # Guard against degenerate resample (all one class)
         if yt.sum() == 0 or yt.sum() == len(yt):
             return float("nan")
-        return average_precision_score(yt, ys)
+        return safe_average_precision_score(yt, ys)
 
     return bootstrap_ci(y_bin, y_score, _metric, n_bootstrap, ci, random_state)
+
