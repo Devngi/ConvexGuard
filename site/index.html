@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ConvexGuard — SVM Fraud Detection</title>
+  <link rel="stylesheet" href="lib/katex.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ── Top bar ───────────────────────────────────────────────── -->
+<div id="topbar">
+  <div id="topbar-inner">
+    <span id="site-title">ConvexGuard</span>
+    <nav id="nav">
+      <button data-tab="check" class="active">Check a Transaction</button>
+      <button data-tab="dataset">Dataset &amp; Features</button>
+      <button data-tab="eda">EDA</button>
+      <button data-tab="model">Model</button>
+      <button data-tab="results">Results</button>
+    </nav>
+  </div>
+</div>
+
+<main>
+
+<!-- ══════════════════════════════════════════════════════════════
+     1. CHECK A TRANSACTION
+═══════════════════════════════════════════════════════════════ -->
+<section id="tab-check" class="active">
+  <h1>Check a Transaction</h1>
+  <p class="subtitle">Enter values below. The SVM formula runs directly in your browser with zero network requests.</p>
+
+  <div class="btn-row">
+    <button class="btn" onclick="loadExample('fraud')">Load real FRAUD example</button>
+    <button class="btn" onclick="loadExample('legit')">Load real LEGIT example</button>
+    <button class="btn primary" onclick="runScore()">Score</button>
+  </div>
+
+  <!-- Key signals -->
+  <h3>Key signals</h3>
+  <div class="form-grid" id="key-inputs">
+    <div class="form-group">
+      <label for="inp-Amount">Amount ($)</label>
+      <input id="inp-Amount" type="number" value="100" step="0.01" min="0" oninput="runScore()">
+    </div>
+    <div class="form-group">
+      <label for="inp-Hour">Hour of day (0–23)</label>
+      <input id="inp-Hour" type="number" value="12" step="1" min="0" max="23" oninput="runScore()">
+    </div>
+    <!-- V4, V9, V10, V12, V14, V17 as sliders -->
+    <div class="form-group">
+      <label for="inp-V4">V4 <span class="slider-val" id="val-V4">0.00</span></label>
+      <input id="inp-V4" type="range" min="-30" max="30" step="0.01" value="0"
+             oninput="document.getElementById('val-V4').textContent=parseFloat(this.value).toFixed(2); runScore();">
+    </div>
+    <div class="form-group">
+      <label for="inp-V9">V9 <span class="slider-val" id="val-V9">0.00</span></label>
+      <input id="inp-V9" type="range" min="-30" max="30" step="0.01" value="0"
+             oninput="document.getElementById('val-V9').textContent=parseFloat(this.value).toFixed(2); runScore();">
+    </div>
+    <div class="form-group">
+      <label for="inp-V10">V10 <span class="slider-val" id="val-V10">0.00</span></label>
+      <input id="inp-V10" type="range" min="-30" max="30" step="0.01" value="0"
+             oninput="document.getElementById('val-V10').textContent=parseFloat(this.value).toFixed(2); runScore();">
+    </div>
+    <div class="form-group">
+      <label for="inp-V12">V12 <span class="slider-val" id="val-V12">0.00</span></label>
+      <input id="inp-V12" type="range" min="-30" max="30" step="0.01" value="0"
+             oninput="document.getElementById('val-V12').textContent=parseFloat(this.value).toFixed(2); runScore();">
+    </div>
+    <div class="form-group">
+      <label for="inp-V14">V14 <span class="slider-val" id="val-V14">0.00</span></label>
+      <input id="inp-V14" type="range" min="-30" max="30" step="0.01" value="0"
+             oninput="document.getElementById('val-V14').textContent=parseFloat(this.value).toFixed(2); runScore();">
+    </div>
+    <div class="form-group">
+      <label for="inp-V17">V17 <span class="slider-val" id="val-V17">0.00</span></label>
+      <input id="inp-V17" type="range" min="-30" max="30" step="0.01" value="0"
+             oninput="document.getElementById('val-V17').textContent=parseFloat(this.value).toFixed(2); runScore();">
+    </div>
+  </div>
+
+  <!-- Advanced accordion -->
+  <details id="advanced-panel">
+    <summary>Advanced — remaining features (default: legit average)</summary>
+    <div class="form-grid" id="adv-inputs">
+      <!-- populated by JS -->
+    </div>
+  </details>
+
+  <!-- Result -->
+  <div class="box" id="result-box">
+    <div id="verdict" class="empty">—</div>
+    <div id="score-val">—</div>
+    <div class="formula-line" id="formula-line">—</div>
+    <div class="row2">
+      <div>
+        <h3>Decision score axis</h3>
+        <div class="chart-wrap chart-sm"><canvas id="chart-axis"></canvas></div>
+      </div>
+      <div>
+        <h3>Score distribution</h3>
+        <div class="chart-wrap chart-sm"><canvas id="chart-hist"></canvas></div>
+      </div>
+    </div>
+    <h3>Top 8 feature influences (w_j · z_j)</h3>
+    <div class="chart-wrap chart-md"><canvas id="chart-contrib"></canvas></div>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     2. DATASET & FEATURES
+═══════════════════════════════════════════════════════════════ -->
+<section id="tab-dataset">
+  <h1>Dataset &amp; Features</h1>
+  <p class="subtitle">Source: <em>Credit Card Fraud Detection</em> dataset (ULB / Kaggle). Two days of European card transactions, September 2013.</p>
+
+  <h2>Source columns</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Column</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>Time</code></td><td>Seconds elapsed since the first transaction in the dataset (data covers 2 days).</td></tr>
+        <tr><td><code>V1 to V28</code></td><td>Anonymized features. The bank applied PCA (principal component analysis) to the original card-transaction details (such as merchant, location and card information) and released only the resulting components for privacy. They are uncorrelated with each other, are already centred, and individual meanings are not disclosed.</td></tr>
+        <tr><td><code>Amount</code></td><td>Transaction amount in dollars.</td></tr>
+        <tr><td><code>Class</code></td><td>Target label: 1 = fraud, 0 = legitimate.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h2>Engineered features</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Feature</th><th>Formula</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td><code>LogAmount</code></td><td>ln(1 + Amount)</td><td>Tames the heavy right skew of raw transaction amounts.</td></tr>
+        <tr><td><code>Hour</code></td><td>floor(Time / 3600) mod 24</td><td>Captures the hour of day, which correlates with fraud patterns.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>The model uses <strong>30 features</strong>: V1 to V28, LogAmount and Hour.</p>
+  <p>Because V1 to V28 cannot be mapped back to real payment fields, the form therefore asks for the key signals directly.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     3. EDA
+═══════════════════════════════════════════════════════════════ -->
+<section id="tab-eda">
+  <h1>Exploratory Data Analysis</h1>
+  <p class="subtitle">Computed from the cleaned data the model was trained on (after removing duplicates). Only features used by the model are shown.</p>
+
+  <!-- Snapshot -->
+  <h2>Dataset snapshot</h2>
+  <div class="stat-cards" id="eda-stats"><!-- populated by JS --></div>
+
+  <!-- Class imbalance -->
+  <h2>Class imbalance</h2>
+  <div class="chart-wrap chart-sm"><canvas id="chart-imbalance"></canvas></div>
+  <p class="takeaway" id="imbalance-caption"></p>
+
+  <!-- Amount -->
+  <h2>Transaction amount by class</h2>
+  <div class="chart-wrap chart-md"><canvas id="chart-amount"></canvas></div>
+  <p class="takeaway" id="amount-caption"></p>
+
+  <!-- Hour fraud rate -->
+  <h2>Fraud rate by hour of day</h2>
+  <div class="chart-wrap chart-md"><canvas id="chart-hour"></canvas></div>
+  <p class="takeaway">Fraud is more common at night (hours 0–6), when human review is reduced.</p>
+
+  <!-- Correlation -->
+  <h2>Correlation with Class (30 features)</h2>
+  <div class="chart-wrap chart-lg"><canvas id="chart-corr"></canvas></div>
+  <p class="takeaway">Sorted by absolute correlation. V14, V4 and V12 are the strongest predictors; LogAmount and Hour add modest signal.</p>
+
+  <!-- Per-feature histogram -->
+  <h2>Per-class distribution</h2>
+  <div class="inline-select">
+    <label for="feat-sel">Feature:</label>
+    <select id="feat-sel" onchange="drawFeatHist()"></select>
+  </div>
+  <div class="chart-wrap chart-md"><canvas id="chart-feat"></canvas></div>
+  <p class="takeaway">Fraud (red) and legit (blue) distributions. Non-overlapping peaks indicate strong discriminative power.</p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     4. MODEL
+═══════════════════════════════════════════════════════════════ -->
+<section id="tab-model">
+  <h1>Model</h1>
+  <p class="subtitle">Soft-margin SVM solved by mini-batch subgradient descent (Pegasos), implemented from scratch in NumPy.</p>
+
+  <!-- Settings -->
+  <h2>Trained settings</h2>
+  <div class="box" id="model-settings"><!-- populated by JS --></div>
+
+  <!-- Math derivation — five collapsible items -->
+  <h2>Mathematical derivation</h2>
+
+  <details class="math-item" open>
+    <summary class="math-summary">1. Soft-margin primal with class-dependent penalties</summary>
+    <div class="math-body">
+      <p>Fraud detection is highly imbalanced. We penalise missed frauds (false negatives) more heavily than false alarms by setting C<sub>+</sub> &gt; C<sub>−</sub>.</p>
+      <div class="math-block" id="math-primal"></div>
+      <p>subject to &nbsp; y<sub>i</sub>(w&#x22A4;x<sub>i</sub> + b) &ge; 1 &minus; &xi;<sub>i</sub>, &nbsp; &xi;<sub>i</sub> &ge; 0.</p>
+    </div>
+  </details>
+
+  <details class="math-item">
+    <summary class="math-summary">2. Hinge-loss form</summary>
+    <div class="math-body">
+      <p>Substituting &xi;<sub>i</sub> = max(0, 1 &minus; y<sub>i</sub> f<sub>i</sub>):</p>
+      <div class="math-block" id="math-hinge"></div>
+      <p>This is the unconstrained convex form minimised directly by the subgradient solver.</p>
+    </div>
+  </details>
+
+  <details class="math-item">
+    <summary class="math-summary">3. Lagrangian and KKT conditions</summary>
+    <div class="math-body">
+      <p>Introducing dual variables &alpha;<sub>i</sub> &ge; 0 and &mu;<sub>i</sub> &ge; 0:</p>
+      <div class="math-block" id="math-lagrangian"></div>
+      <p>The KKT stationarity conditions require:</p>
+      <ul style="margin-left:1.25rem;font-size:0.875rem">
+        <li>w = &sum; &alpha;<sub>i</sub> y<sub>i</sub> x<sub>i</sub> &nbsp;(S1)</li>
+        <li>&sum; &alpha;<sub>i</sub> y<sub>i</sub> = 0 &nbsp;(S2)</li>
+        <li>C<sub>i</sub> = &alpha;<sub>i</sub> + &mu;<sub>i</sub>, &nbsp; &mu;<sub>i</sub> &ge; 0 &nbsp;(S3)</li>
+        <li>&alpha;<sub>i</sub>[y<sub>i</sub> f<sub>i</sub> &minus; 1 + &xi;<sub>i</sub>] = 0 &nbsp;(CS1)</li>
+      </ul>
+    </div>
+  </details>
+
+  <details class="math-item">
+    <summary class="math-summary">4. Dual problem</summary>
+    <div class="math-body">
+      <p>Maximising the Lagrangian over w and b gives the dual:</p>
+      <div class="math-block" id="math-dual"></div>
+      <p>subject to 0 &le; &alpha;<sub>i</sub> &le; C<sub>i</sub> and &sum; &alpha;<sub>i</sub> y<sub>i</sub> = 0.</p>
+    </div>
+  </details>
+
+  <details class="math-item">
+    <summary class="math-summary">5. Convexity and strong duality</summary>
+    <div class="math-body">
+      <p>The primal objective is <strong>convex</strong>: the quadratic term has a positive-semidefinite Hessian and the hinge loss is convex. Every local minimum is therefore global.</p>
+      <p><strong>Strong duality</strong> (zero duality gap) holds because Slater's condition is satisfied: w&nbsp;=&nbsp;0, b&nbsp;=&nbsp;0, &xi;<sub>i</sub>&nbsp;=&nbsp;1 is a strictly feasible interior point. Therefore P* &minus; D* = 0 at the optimum.</p>
+    </div>
+  </details>
+
+  <!-- Optimality check table -->
+  <h2>Optimality check</h2>
+  <p>Computed after training on the full training split.</p>
+  <div class="table-wrap">
+    <table id="verify-table">
+      <thead><tr><th>Condition</th><th class="num">Value</th><th>Result</th></tr></thead>
+      <tbody><!-- populated by JS --></tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════
+     5. RESULTS
+═══════════════════════════════════════════════════════════════ -->
+<section id="tab-results">
+  <h1>Results</h1>
+  <p class="subtitle">Evaluated on the held-out test set (15% of data, never used for training or threshold selection).</p>
+
+  <!-- Threshold slider -->
+  <h2>Threshold</h2>
+  <div class="box">
+    <div class="form-group" style="max-width:480px">
+      <label for="thresh-range">Decision threshold: <span id="thresh-disp" style="font-family:var(--mono)">—</span></label>
+      <input type="range" id="thresh-range" oninput="onThreshSlider()">
+    </div>
+    <p id="thresh-info" style="margin-top:0.5rem"></p>
+    <div class="row3" id="thresh-cards" style="margin-top:0.75rem"><!-- filled by JS --></div>
+  </div>
+
+  <!-- Confusion matrix -->
+  <h3>Confusion matrix</h3>
+  <div class="table-wrap" style="max-width:320px">
+    <table id="cm-table">
+      <thead><tr><th></th><th>Pred Safe</th><th>Pred Fraud</th></tr></thead>
+      <tbody>
+        <tr><th>Actual Safe</th>  <td class="num" id="cm-tn">—</td><td class="num" id="cm-fp">—</td></tr>
+        <tr><th>Actual Fraud</th> <td class="num" id="cm-fn">—</td><td class="num" id="cm-tp">—</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- PR curve -->
+  <h2>Precision-Recall curve</h2>
+  <div class="chart-wrap chart-md"><canvas id="chart-pr"></canvas></div>
+
+  <!-- Comparison table -->
+  <h2>Model comparison</h2>
+  <div class="table-wrap">
+    <table id="compare-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th class="num">PR-AUC</th>
+          <th class="num">Precision</th>
+          <th class="num">Recall</th>
+          <th class="num">False alarms</th>
+        </tr>
+      </thead>
+      <tbody><!-- populated by JS --></tbody>
+    </table>
+  </div>
+</section>
+
+</main>
+
+<script src="lib/chart.min.js"></script>
+<script src="lib/katex.min.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
